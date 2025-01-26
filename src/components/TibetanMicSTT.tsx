@@ -12,7 +12,7 @@ interface MonlamAPIResponse {
   file: string;
   output: string;
   responseTime: number;
-  error?: string;  // Add this line to include the error property
+  error?: string;
 }
 
 const TibetanMicSTT = () => {
@@ -23,13 +23,47 @@ const TibetanMicSTT = () => {
   const [remainingTime, setRemainingTime] = useState<number>(MAX_RECORDING_TIME);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
+  const [micPermission, setMicPermission] = useState<string>('prompt');
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
+  // Check if running on iOS
+  const isIOS = () => {
+    return [
+      'iPad Simulator',
+      'iPhone Simulator',
+      'iPod Simulator',
+      'iPad',
+      'iPhone',
+      'iPod'
+    ].includes(navigator.platform)
+      || (navigator.userAgent.includes("Mac") && "ontouchend" in document);
+  };
+
   useEffect(() => {
+    // Check browser compatibility
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      setError('Audio recording is not supported in this browser');
+      return;
+    }
+
+    // Check microphone permission
+    async function checkMicPermission() {
+      try {
+        const result = await navigator.permissions.query({ name: 'microphone' as PermissionName });
+        setMicPermission(result.state);
+        result.addEventListener('change', () => {
+          setMicPermission(result.state);
+        });
+      } catch (err) {
+        console.log('Permission check error:', err);
+      }
+    }
+    checkMicPermission();
+
     return () => {
       if (timerRef.current) {
         clearInterval(timerRef.current);
@@ -46,9 +80,32 @@ const TibetanMicSTT = () => {
       setAudioUrl(null);
       setTranscription('');
 
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      // Add audio constraints for better mobile compatibility
+      const constraints = {
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        }
+      };
 
-      mediaRecorderRef.current = new MediaRecorder(stream);
+      // Request permissions explicitly
+      const permissionResult = await navigator.permissions.query({ name: 'microphone' as PermissionName });
+      console.log('Microphone permission status:', permissionResult.state);
+
+      if (permissionResult.state === 'denied') {
+        throw new Error('Microphone permission denied. Please enable microphone access in your browser settings.');
+      }
+
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+
+      // Set up recorder with specific options for better compatibility
+      const options = {
+        mimeType: 'audio/webm;codecs=opus',
+        audioBitsPerSecond: 128000
+      };
+
+      mediaRecorderRef.current = new MediaRecorder(stream, options);
       chunksRef.current = [];
 
       mediaRecorderRef.current.ondataavailable = (event) => {
@@ -58,7 +115,9 @@ const TibetanMicSTT = () => {
       };
 
       mediaRecorderRef.current.onstop = () => {
-        const audioBlob = new Blob(chunksRef.current, { type: 'audio/wav' });
+        const audioBlob = new Blob(chunksRef.current, {
+          type: 'audio/wav; codecs=1'
+        });
         const url = URL.createObjectURL(audioBlob);
         setAudioUrl(url);
 
@@ -84,16 +143,31 @@ const TibetanMicSTT = () => {
 
     } catch (err) {
       setError(`Error accessing microphone: ${err instanceof Error ? err.message : 'Unknown error'}`);
+      console.error('Microphone error:', err);
     }
+  };
+
+  const handleStartRecordingClick = async () => {
+    if (isIOS()) {
+      alert('Please ensure you have:\n1. Allowed microphone access in Settings\n2. Are not in Silent Mode (switch on side of phone)\n3. Have allowed the website to use your microphone');
+    }
+    await startRecording();
   };
 
   const stopRecording = () => {
     if (mediaRecorderRef.current && isRecording) {
-      mediaRecorderRef.current.stop();
-      setIsRecording(false);
-
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
+      try {
+        mediaRecorderRef.current.stop();
+        // Stop all tracks in the stream
+        mediaRecorderRef.current.stream.getTracks().forEach(track => track.stop());
+        setIsRecording(false);
+        
+        if (timerRef.current) {
+          clearInterval(timerRef.current);
+        }
+      } catch (err) {
+        console.error('Error stopping recording:', err);
+        setError('Error stopping recording. Please refresh the page.');
       }
     }
   };
@@ -178,9 +252,17 @@ const TibetanMicSTT = () => {
 
   return (
     <div className="max-w-2xl mx-auto p-4">
-      <h2 className="text-3xl font-bold mb-8 text-gray-900 text-center">Tibetan Speech to Text</h2>
+      <h2 className="text-3xl font-bold mb-8 text-gray-900 text-center">
+        Tibetan Speech to Text
+      </h2>
 
       <div className="flex flex-col items-center space-y-4">
+        {micPermission === 'denied' && (
+          <div className="text-red-500 mb-4 text-center">
+            Microphone access is blocked. Please enable it in your browser settings.
+          </div>
+        )}
+
         {/* Timer */}
         <div className="text-xl font-mono text-gray-900">
           {isRecording ? formatTime(remainingTime) : "2:00"}
@@ -189,8 +271,8 @@ const TibetanMicSTT = () => {
         {/* Record button */}
         {!audioUrl && (
           <button
-            onClick={isRecording ? stopRecording : startRecording}
-            disabled={isLoading}
+            onClick={isRecording ? stopRecording : handleStartRecordingClick}
+            disabled={isLoading || micPermission === 'denied'}
             className={`p-4 rounded-full ${isRecording
                 ? 'bg-red-500 hover:bg-red-600'
                 : 'bg-blue-500 hover:bg-blue-600'
@@ -245,7 +327,7 @@ const TibetanMicSTT = () => {
         )}
 
         {/* Status text */}
-        <div className="text-sm text-gray-600">
+        <div className="text-sm text-gray-900">
           {isRecording
             ? 'Recording... Click to stop'
             : audioUrl
