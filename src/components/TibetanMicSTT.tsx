@@ -85,29 +85,38 @@ const TibetanMicSTT = () => {
           echoCancellation: true,
           noiseSuppression: true,
           autoGainControl: true,
+          sampleRate: 44100,
+          channelCount: 1
         }
       };
 
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
 
-      // Try different MIME types for better compatibility
-      let options = {};
-      
-      // Check for supported MIME types
+      // Check supported MIME types in order of preference
       const mimeTypes = [
         'audio/webm',
+        'audio/ogg',
         'audio/mp4',
-        'audio/aac',
-        'audio/wav'
+        'audio/aac'
       ];
 
+      let selectedType = '';
       for (const type of mimeTypes) {
         if (MediaRecorder.isTypeSupported(type)) {
-          options = { mimeType: type };
-          console.log('Using MIME type:', type);
+          selectedType = type;
+          console.log('Selected MIME type:', type);
           break;
         }
       }
+
+      if (!selectedType) {
+        throw new Error('No supported audio MIME type found');
+      }
+
+      const options = {
+        audioBitsPerSecond: 128000,
+        mimeType: selectedType
+      };
 
       mediaRecorderRef.current = new MediaRecorder(stream, options);
       chunksRef.current = [];
@@ -115,14 +124,16 @@ const TibetanMicSTT = () => {
       mediaRecorderRef.current.ondataavailable = (event) => {
         if (event.data.size > 0) {
           chunksRef.current.push(event.data);
+          console.log('Chunk size:', event.data.size);
         }
       };
 
       mediaRecorderRef.current.onstop = () => {
-        // Create blob based on platform
-        const audioBlob = new Blob(chunksRef.current, {
-          type: isIOS() ? 'audio/mp4' : 'audio/wav'
+        // Create blob based on selected type
+        const audioBlob = new Blob(chunksRef.current, { 
+          type: selectedType
         });
+        console.log('Final blob size:', audioBlob.size);
         const url = URL.createObjectURL(audioBlob);
         setAudioUrl(url);
 
@@ -130,7 +141,12 @@ const TibetanMicSTT = () => {
         stream.getTracks().forEach(track => track.stop());
       };
 
-      mediaRecorderRef.current.start();
+      if (isIOS()) {
+        mediaRecorderRef.current.start(100);
+      } else {
+        mediaRecorderRef.current.start();
+      }
+      
       setIsRecording(true);
       setRemainingTime(MAX_RECORDING_TIME);
 
@@ -210,17 +226,24 @@ const TibetanMicSTT = () => {
     try {
       const response = await fetch(audioUrl);
       const audioBlob = await response.blob();
-      console.log('Audio blob size:', audioBlob.size);
+      console.log('Original audio blob size:', audioBlob.size);
 
       const formData = new FormData();
       formData.append('file', audioBlob, 'recording.wav');
       formData.append('lang', 'bo');
 
+      // Set longer timeout for iOS
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+
       console.log('Sending to API...');
       const apiResponse = await fetch('/api/stt', {
         method: 'POST',
         body: formData,
+        signal: controller.signal
       });
+
+      clearTimeout(timeoutId);
 
       console.log('API Response status:', apiResponse.status);
       const data: MonlamAPIResponse = await apiResponse.json();
