@@ -40,7 +40,7 @@ const TibetanMicSTT = () => {
       'iPhone',
       'iPod'
     ].includes(navigator.platform)
-      || (navigator.userAgent.includes("Mac") && "ontouchend" in document);
+    || (navigator.userAgent.includes("Mac") && "ontouchend" in document);
   };
 
   useEffect(() => {
@@ -80,7 +80,6 @@ const TibetanMicSTT = () => {
       setAudioUrl(null);
       setTranscription('');
 
-      // Add audio constraints for better mobile compatibility
       const constraints = {
         audio: {
           echoCancellation: true,
@@ -89,21 +88,26 @@ const TibetanMicSTT = () => {
         }
       };
 
-      // Request permissions explicitly
-      const permissionResult = await navigator.permissions.query({ name: 'microphone' as PermissionName });
-      console.log('Microphone permission status:', permissionResult.state);
-
-      if (permissionResult.state === 'denied') {
-        throw new Error('Microphone permission denied. Please enable microphone access in your browser settings.');
-      }
-
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
 
-      // Set up recorder with specific options for better compatibility
-      const options = {
-        mimeType: 'audio/webm;codecs=opus',
-        audioBitsPerSecond: 128000
-      };
+      // Try different MIME types for better compatibility
+      let options = {};
+      
+      // Check for supported MIME types
+      const mimeTypes = [
+        'audio/webm',
+        'audio/mp4',
+        'audio/aac',
+        'audio/wav'
+      ];
+
+      for (const type of mimeTypes) {
+        if (MediaRecorder.isTypeSupported(type)) {
+          options = { mimeType: type };
+          console.log('Using MIME type:', type);
+          break;
+        }
+      }
 
       mediaRecorderRef.current = new MediaRecorder(stream, options);
       chunksRef.current = [];
@@ -115,8 +119,9 @@ const TibetanMicSTT = () => {
       };
 
       mediaRecorderRef.current.onstop = () => {
+        // Create blob based on platform
         const audioBlob = new Blob(chunksRef.current, {
-          type: 'audio/wav; codecs=1'
+          type: isIOS() ? 'audio/mp4' : 'audio/wav'
         });
         const url = URL.createObjectURL(audioBlob);
         setAudioUrl(url);
@@ -142,8 +147,8 @@ const TibetanMicSTT = () => {
       }, 1000);
 
     } catch (err) {
+      console.error('Recording error:', err);
       setError(`Error accessing microphone: ${err instanceof Error ? err.message : 'Unknown error'}`);
-      console.error('Microphone error:', err);
     }
   };
 
@@ -273,10 +278,11 @@ const TibetanMicSTT = () => {
           <button
             onClick={isRecording ? stopRecording : handleStartRecordingClick}
             disabled={isLoading || micPermission === 'denied'}
-            className={`p-4 rounded-full ${isRecording
-                ? 'bg-red-500 hover:bg-red-600'
+            className={`p-4 rounded-full ${
+              isRecording 
+                ? 'bg-red-500 hover:bg-red-600' 
                 : 'bg-blue-500 hover:bg-blue-600'
-              } text-white transition-colors disabled:bg-gray-300`}
+            } text-white transition-colors disabled:bg-gray-300`}
             title={isRecording ? "Stop Recording" : "Start Recording"}
           >
             {isRecording ? (
@@ -290,7 +296,7 @@ const TibetanMicSTT = () => {
         {/* Audio preview */}
         {audioUrl && (
           <div className="w-full space-y-4">
-            <audio
+            <audio 
               ref={audioRef}
               src={audioUrl}
               onEnded={handleAudioEnded}
@@ -328,9 +334,9 @@ const TibetanMicSTT = () => {
 
         {/* Status text */}
         <div className="text-sm text-gray-900">
-          {isRecording
-            ? 'Recording... Click to stop'
-            : audioUrl
+          {isRecording 
+            ? 'Recording... Click to stop' 
+            : audioUrl 
               ? 'Preview your recording before sending'
               : 'Click to start recording'}
         </div>
